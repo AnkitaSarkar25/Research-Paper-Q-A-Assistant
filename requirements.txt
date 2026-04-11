@@ -1,0 +1,32 @@
+# ── Core Framework ────────────────────────────────────────────────────────────
+streamlit>=1.35.0
+
+# ── LangChain ecosystem ───────────────────────────────────────────────────────
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-community>=0.2.0
+langchain-google-genai>=1.0.0
+langchain-huggingface>=0.0.3
+langchain-text-splitters>=0.2.0
+
+# ── LLM — Google Gemini ───────────────────────────────────────────────────────
+google-generativeai>=0.7.0
+
+# ── Embeddings — local sentence-transformers ──────────────────────────────────
+sentence-transformers>=3.0.0
+torch>=2.0.0                  # CPU-only is fine; sentence-transformers needs it
+
+# ── PDF loading ───────────────────────────────────────────────────────────────
+pypdf>=4.0.0
+
+# ── Vector store ──────────────────────────────────────────────────────────────
+faiss-cpu>=1.8.0              # use faiss-gpu if you have a CUDA GPU
+
+# ── Hybrid / BM25 retrieval ───────────────────────────────────────────────────
+rank-bm25>=0.2.2
+
+# ── Numerical ─────────────────────────────────────────────────────────────────
+numpy>=1.26.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0          # optional: load GOOGLE_API_KEY from .env file

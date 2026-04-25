@@ -204,31 +204,79 @@ class RAGPipeline:
         logger.info("Pipeline reset.")
 
 
-def try_load_existing_index() -> RAGPipeline:
+def _index_is_corrupted(chunks: List[Document]) -> bool:
+    """
+    Scan a sample of loaded chunks for HTML contamination.
+
+    If any chunk's page_content contains 2+ HTML tags, the index was built
+    from unclean text and must be discarded and rebuilt.
+
+    We sample up to 50 chunks (not all, to keep startup fast).
+    Returns True if the index is corrupted.
+    """
+    import re
+    sample = chunks[:50]
+    tag_re = re.compile(r"<[a-zA-Z/][^>]{0,80}>")
+    for doc in sample:
+        content = doc.page_content or ""
+        if len(tag_re.findall(content)) >= 2:
+            logger.warning(
+                f"Corrupted chunk detected in saved index — "
+                f"paper='{doc.metadata.get('paper_name')}' "
+                f"page={doc.metadata.get('page_number')}: "
+                f"content starts with: {content[:120]!r}"
+            )
+            return True
+    return False
+
+
+def try_load_existing_index() -> "RAGPipeline":
     """
     Attempt to restore a pipeline from a persisted FAISS index.
 
-    Called at app startup so users don't lose their index on page refresh.
-    If no saved index exists, returns a fresh empty pipeline.
+    Includes an integrity check: if the saved index contains HTML-
+    contaminated chunks (built before the cleaner was fixed), the index
+    is automatically discarded and the user is prompted to re-index.
+    This prevents the HTML-in-citations bug from persisting across sessions.
 
     Returns:
-        Initialised RAGPipeline (may be empty if no saved index found).
+        Initialised RAGPipeline (may be empty if no valid saved index found).
     """
+    from src.vectorstore.faiss_store import clear_vectorstore  # imported lazily
+
     pipeline = RAGPipeline()
     existing_store = load_vectorstore()
 
-    if existing_store is not None:
-        pipeline.vectorstore = existing_store
-        # Reconstruct chunk list from the docstore for BM25
-        pipeline.all_chunks = list(existing_store.docstore._dict.values())
-        pipeline.bm25_retriever = BM25Retriever(pipeline.all_chunks)
-        # Reconstruct ingested paper names
-        pipeline.ingested_papers = {
-            doc.metadata.get("paper_name", "") for doc in pipeline.all_chunks
-        }
-        logger.info(
-            f"Restored pipeline with {len(pipeline.all_chunks)} chunks "
-            f"from {len(pipeline.ingested_papers)} paper(s)."
-        )
+    if existing_store is None:
+        logger.info("No saved index found — starting fresh.")
+        return pipeline
 
+    # Reconstruct chunk list for validation + BM25
+    all_chunks = list(existing_store.docstore._dict.values())
+
+    # ── Integrity check ───────────────────────────────────────────────────────
+    if _index_is_corrupted(all_chunks):
+        logger.warning(
+            "Saved FAISS index contains HTML-contaminated chunks. "
+            "Discarding stale index — user must re-upload PDFs."
+        )
+        try:
+            clear_vectorstore()
+        except Exception as exc:
+            logger.error(f"Failed to clear corrupted index: {exc}")
+        # Return empty pipeline — the Streamlit UI will show the upload prompt
+        pipeline._index_was_corrupt = True   # flag so UI can show a notice
+        return pipeline
+
+    # ── Healthy index — restore normally ──────────────────────────────────────
+    pipeline.vectorstore = existing_store
+    pipeline.all_chunks  = all_chunks
+    pipeline.bm25_retriever = BM25Retriever(all_chunks)
+    pipeline.ingested_papers = {
+        doc.metadata.get("paper_name", "") for doc in all_chunks
+    }
+    logger.info(
+        f"Restored pipeline: {len(all_chunks)} chunks "
+        f"from {len(pipeline.ingested_papers)} paper(s) — index is clean."
+    )
     return pipeline

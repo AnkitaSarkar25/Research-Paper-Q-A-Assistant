@@ -32,7 +32,7 @@ Key design decisions to minimise hallucination:
 import logging
 import os
 from typing import List, Tuple
-
+from pathlib import Path
 from langchain_core.documents import Document
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -41,6 +41,10 @@ from config import LLM_MODEL_NAME, MAX_OUTPUT_TOKENS, TEMPERATURE
 
 logger = logging.getLogger(__name__)
 
+from dotenv import load_dotenv
+
+# Load .env from project root (no-op if file is absent)
+load_dotenv(Path(__file__).parent / ".env")
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are a Research Paper Q&A Assistant. Your ONLY job is to answer
@@ -60,7 +64,7 @@ Output format:
 <your detailed answer with inline citations like [PaperName, p.3]>
 
 **Key Citations:**
-- [PaperName, p.N]: <one-line quote or paraphrase that directly supports the answer>
+- [PaperName, p.N]: <one-line quote or paraphrase that directly supports the answer, make sure no html junks only clean meaningfull text> 
 """
 
 
@@ -117,6 +121,109 @@ def get_llm() -> ChatGoogleGenerativeAI:
     return _llm
 
 
+# ── Excerpt cleaning helpers ──────────────────────────────────────────────────
+
+import re as _re
+from html.parser import HTMLParser as _HTMLParser
+
+
+class _TagStripper(_HTMLParser):
+    """Minimal HTML parser that collects only visible text nodes."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._buf: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style", "head"}:
+            self._skip += 1
+
+    def handle_endtag(self, tag):
+        if tag in {"script", "style", "head"} and self._skip:
+            self._skip -= 1
+
+    def handle_data(self, data):
+        if not self._skip:
+            self._buf.append(data)
+
+    def text(self) -> str:
+        return " ".join(self._buf)
+
+
+def _strip_html_tags(text: str) -> str:
+    """
+    Remove all HTML/XML tags from text and return plain prose.
+    Uses stdlib html.parser — no external dependencies.
+    Falls back to regex if the parser raises.
+    """
+    if not text:
+        return ""
+    if not _re.search(r"<[a-zA-Z/!]", text):
+        return text   # fast path: no tags at all
+    try:
+        p = _TagStripper()
+        p.feed(text)
+        return p.text()
+    except Exception:
+        return _re.sub(r"<[^>]+>", " ", text)
+
+
+def _clean_pdf_text(text: str) -> str:
+    """
+    Remove common PDF extraction artefacts from a plain-text string.
+
+    Handles:
+    - Ligature Unicode characters  (ﬁ → fi)
+    - Hyphenated line-break merges (meth-\nod → method)
+    - Stray reference numbers      ([1], [23])
+    - DOI / URL noise
+    - CSS class-name tokens leaked from prior render cycles
+    - Excessive whitespace
+    """
+    if not text:
+        return ""
+
+    # Ligatures
+    for lig, rep in {
+        "\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl",
+        "\ufb03": "ffi", "\ufb04": "ffl", "\ufb06": "st",
+        "\u00e6": "ae", "\u0153": "oe",
+    }.items():
+        text = text.replace(lig, rep)
+
+    # Hyphenated line-breaks  e.g. "meth-\nod" → "method"
+    text = _re.sub(r"-\n(\w)", r"\1", text)
+
+    # CSS class-name literals that leak when page_content captured HTML
+    text = _re.sub(
+        r"\b(?:cite|score|eval|src|sb|pipe|tip|hero|query|unc|ef|ev|qa|a|q)"
+        r"-(?:wrap|item|hdr|num|paper|tag|score|excerpt|body|card|badge|meta"
+        r"|high|mid|low|good|med|bad|fill|bar|cell|lbl|val|icon|text|"
+        r"grid|warn|step|name|desc|arrow|empty)\b",
+        "", text,
+    )
+    # HTML attribute remnants  e.g.  class="cite-item"
+    text = _re.sub(r'\w[\w-]*\s*=\s*["\'][^"\']*["\']', "", text)
+
+    # Stray reference numbers at start  e.g. "[1]", "[23]"
+    text = _re.sub(r"^\s*\[\d+\]\s*", "", text)
+
+    # Score / percentage UI badges  e.g. "↑ 0%"
+    text = _re.sub(r"[↑↓]\s*\d+\s*%", "", text)
+
+    # DOI lines and watermarks
+    text = _re.sub(r"\bhttps?://\S+", "", text)
+    text = _re.sub(r"\b10\.\d{4,}/\S+", "", text)
+    text = _re.sub(r"downloaded from\b.*", "", text, flags=_re.I)
+    text = _re.sub(r"how to cite this article\b.*", "", text, flags=_re.I)
+    text = _re.sub(r"terms and conditions\b.*", "", text, flags=_re.I)
+
+    # Collapse whitespace
+    text = _re.sub(r"\s+", " ", text).strip()
+
+    return text
+
+
 # ── Answer generation ─────────────────────────────────────────────────────────
 
 def generate_answer(
@@ -161,17 +268,37 @@ def generate_answer(
     answer_text = response.content
     logger.info("Response received.")
 
-    # Build structured source list for the UI
+    # Build structured source list for the UI.
+    # IMPORTANT: page_content is raw extracted PDF text — it can contain
+    # stray HTML tags, ligatures, and PDF artefacts. We clean it here at
+    # the source so the UI never receives dirty data regardless of which
+    # rendering path is used.
     sources = []
     seen_ids = set()
     for doc, score in reranked_chunks:
         cid = doc.metadata.get("chunk_id", "")
         if cid not in seen_ids:
+            raw_content = doc.page_content or ""
+
+            # ── Strip any HTML markup from the raw chunk text ──────────────
+            # PDF extractors sometimes produce text like "<br/>", "<p>", etc.
+            # We remove all tags so excerpts are always plain readable prose.
+            clean_content = _strip_html_tags(raw_content)
+
+            # ── Remove common PDF extraction noise patterns ─────────────────
+            clean_content = _clean_pdf_text(clean_content)
+
+            # ── Truncate to 300 chars at a word boundary ────────────────────
+            if len(clean_content) > 300:
+                excerpt = clean_content[:300].rsplit(" ", 1)[0] + " …"
+            else:
+                excerpt = clean_content
+
             sources.append({
                 "paper_name":  doc.metadata.get("paper_name", "unknown"),
                 "page_number": doc.metadata.get("page_number", "?"),
                 "section":     doc.metadata.get("section", ""),
-                "excerpt":     doc.page_content[:300] + "…" if len(doc.page_content) > 300 else doc.page_content,
+                "excerpt":     excerpt,
                 "score":       round(score, 3),
             })
             seen_ids.add(cid)

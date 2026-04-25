@@ -6,6 +6,14 @@ imports from ONE place. Changing a value here propagates everywhere.
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from project root (no-op if file is absent)
+load_dotenv(Path(__file__).parent / ".env")
+
+# ── API Keys (loaded from .env) ───────────────────────────────────────────────
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 
 # ── Project root (this file's parent directory) ─────────────────────────────
 ROOT_DIR = Path(__file__).parent.resolve()

@@ -129,6 +129,8 @@ def chunk_documents(documents: List[Document]) -> List[Document]:
             for sub_text in sub_texts:
                 if not sub_text.strip():
                     continue
+                if len(sub_text.strip()) < 80:
+                    continue
                 chunk = _make_chunk(
                     text=sub_text,
                     paper_name=paper_name,

@@ -115,3 +115,21 @@ def add_documents_to_store(
     vectorstore.save_local(_INDEX_PATH)
     logger.info("Updated FAISS index saved.")
     return vectorstore
+
+
+def clear_vectorstore() -> None:
+    """
+    Delete the persisted FAISS index files from disk.
+
+    Called automatically when the pipeline detects a corrupted index
+    (e.g. one built from HTML-contaminated text).
+    Also called by the "Clear Knowledge Base" button in the UI.
+    """
+    import shutil
+    index_dir = Path(_INDEX_PATH)
+    if index_dir.exists():
+        shutil.rmtree(index_dir)
+        index_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"FAISS index cleared: {_INDEX_PATH}")
+    else:
+        logger.info("No index directory found — nothing to clear.")

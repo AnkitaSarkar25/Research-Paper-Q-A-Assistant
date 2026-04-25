@@ -111,8 +111,8 @@ def get_llm() -> ChatGoogleGenerativeAI:
         _llm = ChatGoogleGenerativeAI(
             model=LLM_MODEL_NAME,
             google_api_key=api_key,
-            max_output_tokens=MAX_OUTPUT_TOKENS,
-            temperature=TEMPERATURE,
+            # max_output_tokens=MAX_OUTPUT_TOKENS,
+            temperature=TEMPERATURE
         )
     return _llm
 

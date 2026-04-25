@@ -20,7 +20,7 @@ VECTORSTORE_DIR = PROCESSED_DIR / "vectorstore"
 
 # ── Model settings ───────────────────────────────────────────────────────────
 # LLM — Gemini 2.5 Flash (via google-generativeai / LangChain)
-LLM_MODEL_NAME = "gemini-2.5-flash-preview-05-20"
+LLM_MODEL_NAME = "gemini-2.5-flash"
 
 # Embeddings — lightweight local model (no extra API quota needed)
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"   # sentence-transformers
@@ -38,7 +38,7 @@ TOP_K_RERANK   = 5    # how many chunks to pass to the LLM after reranking
 SEMANTIC_WEIGHT = 0.7
 
 # ── Generation settings ───────────────────────────────────────────────────────
-MAX_OUTPUT_TOKENS = 1024
+MAX_OUTPUT_TOKENS = 5000
 TEMPERATURE       = 0.2   # low → less hallucination
 
 # ── Ensure directories exist at import time ───────────────────────────────────
